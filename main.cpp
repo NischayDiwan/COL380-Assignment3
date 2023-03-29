@@ -52,6 +52,14 @@ int main(int argc, char* argv[]){
 	verb = verb.substr(10, verb.length() - 10);
 	int verbose = stoi(verb);
 
+	string taskids = argv[1];
+	taskids = taskids.substr(9, taskids.length() - 9);
+	int taskid = stoi(taskids);
+
+	string pstr = argv[8];
+	pstr = pstr.substr(4, pstr.length() - 4);
+	int p = stoi(pstr);
+
 	// store number of nodes and edges
 	ifstream infile(filename, ios::in | ios::binary);
 	infile.read(reinterpret_cast<char *>(&n), 4);
@@ -277,32 +285,6 @@ int main(int argc, char* argv[]){
 				}
 				b[4] = dst1; b[8] = dst2;
 			}
-			//parallel
-			// MPI_Request msreq;
-			// MPI_Isend(b, 9, MPI_INT, 0, id, MPI_COMM_WORLD, &msreq);
-
-			// int num_packets[sz], payload = 0;
-			// for(i = 0; i < sz; i++){
-			// 	num_packets[i] = 0;
-			// }
-			// int mb[9*sz];
-			// if(id == 0){
-			// 	for(i = 0; i < sz; i++){
-			// 		MPI_Status status;
-			// 		MPI_Recv(mb+9*i, 9, MPI_INT, i, i, MPI_COMM_WORLD, &status);
-			// 		if(mb[9*i] != 0){
-			// 			num_packets[mb[9*i+4]]++;
-			// 			num_packets[mb[9*i+8]]++;
-			// 		}
-			// 	}
-			// 	for(i = 0; i < sz; i++){
-			// 		MPI_Request req;
-			// 		MPI_Isend(&num_packets[i], 1, MPI_INT, i, i, MPI_COMM_WORLD, &req);
-			// 	}
-			// }
-
-			// MPI_Status status;
-			// MPI_Recv(&payload, 1, MPI_INT, 0, id, MPI_COMM_WORLD, &status);
 
 			// gather scatter approach
 			int num_packets[sz], payload = 0;
@@ -405,15 +387,15 @@ int main(int argc, char* argv[]){
 	}
 
 	MPI_Allreduce(&curk, &maxk, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
-	if(verbose == 0){
+	if(verbose == 0 and taskid == 1){
 		if(id == 0){
 			ofstream outfile(outname);
 			for(i = startk; i <= endk; i++){
 				if(i <= maxk){
-					outfile << 1 << "\n";
+					outfile << 1 << " ";
 				}
 				else{
-					outfile << 0 << "\n";
+					outfile << 0 << " ";
 				}
 			}
 			outfile.close();
@@ -424,7 +406,7 @@ int main(int argc, char* argv[]){
 			cout << "Verbose 0: " << endt - startt << "\n";
 		}
 
-	}else if(verbose == 1){
+	}else if(verbose == 1 and taskid == 1){
 		MPI_Barrier(MPI_COMM_WORLD);
 		int currtrussize = 0;
 		int tedct[sz];
@@ -535,7 +517,115 @@ int main(int argc, char* argv[]){
 		if(id == 0){
 			cout << "Verbose 1: " << endt - startt << "\n";
 		}
+	}else if(taskid == 2){
+		MPI_Barrier(MPI_COMM_WORLD);
+		int currtrussize = 0;
+		int tedct[sz];
+		int dok = endk;
+		// mpi send recieve left
+		if(id == 0){
+			vector<int> link(n,0);
+			// int size[n];
+			for(k = 0; k < n; k++) link[k] = k;
+			// for(k = 0; k < n; k++) size[k] = 1;
+			// vector<vector<vector<int>>> tempg;
+			
+			// finding the truss components
+			// i = dok;
+			set<int> tk;
+			currtrussize = dok+2;
+			MPI_Bcast(&currtrussize, 1, MPI_INT, 0, MPI_COMM_WORLD);
+			int edct = 0;
+			for(auto truss: T){
+				pair<int, int> e = truss.first;
+				if(truss.second >= currtrussize){
+					edct++;
+					unite(e.first, e.second, link);
+					tk.insert(e.first);
+					tk.insert(e.second);
+				}
+			}
+			MPI_Gather(&edct, 1, MPI_INT, &tedct, 1, MPI_INT, 0, MPI_COMM_WORLD);
+			for(j = 1; j < sz; j++){
+				// cout << tedct[j] << endl;
+				for(int jc = 0; jc < tedct[j]; jc++){
+					int ed[2];
+					// MPI_Status jstat;
+					MPI_Recv(&ed, 2, MPI_INT, j, j, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+					// MPI_Wait(&jstat, MPI_STATUS_IGNORE);
+					unite(ed[0], ed[1], link);
+					tk.insert(ed[0]);
+					tk.insert(ed[1]);
+				}
+				
+			}
+			// cout << endl;
+			map<int, vector<int>> rep;
+			for(auto e: tk){
+				if(rep.find(find(e, link)) == rep.end()){
+					vector<int> temp;
+					temp.push_back(e);
+					rep[find(e, link)] = temp;
+				}
+				else{
+					rep[find(e, link)].push_back(e);
+				}
+			}
+
+			vector<vector<int>> gk;
+			for(auto x: rep){
+				gk.push_back(x.second);
+			}
+			// tempg.push_back(gk);
+
+			// printing the graph
+			// std::reverse(tempg.begin(), tempg.end());
+			ofstream outfile(outname);
+			if(dok <= maxk){
+				outfile << 1 << "\n";
+				outfile << gk.size() << "\n";
+				for(auto e: gk){
+					for(auto v: e){
+						outfile << v << " ";
+					}
+					outfile << "\n";
+				}
+			}
+			else{
+				outfile << -1 << "\n";
+			}
+			outfile.close();
+		}else{
+			MPI_Bcast(&currtrussize, 1, MPI_INT, 0, MPI_COMM_WORLD);
+			//cout << id << " has currtrussize?: " << currtrussize << endl;
+			int edct = 0;
+			for(auto truss: T){
+				pair<int, int> e = truss.first;
+				if(truss.second >= currtrussize){
+					edct++;
+				}
+			}
+			MPI_Gather(&edct, 1, MPI_INT, &tedct, 1, MPI_INT, 0, MPI_COMM_WORLD);
+			// MPI_Barrier(MPI_COMM_WORLD);
+			//cout << id << "is ready to send" << endl;
+			for(auto truss: T){
+				pair<int, int> e = truss.first;
+				if(truss.second >= currtrussize){
+					int ed[2];
+					ed[0] = e.first;
+					ed[1] = e.second;
+					MPI_Send(&ed, 2, MPI_INT, 0, id, MPI_COMM_WORLD);
+				}
+			}
+			//cout << id << "has sent" << endl;
+		}
+
+		endt = MPI_Wtime();
+		if(id == 0){
+			cout << "Verbose 1: " << endt - startt << "\n";
+		}
 	}
+	
 
 	//finsihed
 	endt = MPI_Wtime();
