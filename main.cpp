@@ -512,26 +512,33 @@ int main(int argc, char* argv[]){
 				//cout << id << "has sent" << endl;
 			}
 		}
-
 		endt = MPI_Wtime();
 		if(id == 0){
 			cout << "Verbose 1: " << endt - startt << "\n";
 		}
 	}else if(taskid == 2){
+		// if(id == 0){
+		// 	assert(V.size() == E.size());
+		// 	for(auto v: V){
+		// 		cout << v << " ";
+		// 	}
+		// 	cout << "\n";
+		// 	for(auto Ei: E){
+		// 		for(auto e: Ei){
+		// 			cout << e << " ";
+		// 		}
+		// 		cout << "\n";
+		// 	}
+		// }
 		MPI_Barrier(MPI_COMM_WORLD);
 		int currtrussize = 0;
 		int tedct[sz];
 		int dok = endk;
 		// mpi send recieve left
+		vector<int> link(n,0);
 		if(id == 0){
-			vector<int> link(n,0);
 			// int size[n];
 			for(k = 0; k < n; k++) link[k] = k;
-			// for(k = 0; k < n; k++) size[k] = 1;
-			// vector<vector<vector<int>>> tempg;
-			
-			// finding the truss components
-			// i = dok;
 			set<int> tk;
 			currtrussize = dok+2;
 			MPI_Bcast(&currtrussize, 1, MPI_INT, 0, MPI_COMM_WORLD);
@@ -559,42 +566,7 @@ int main(int argc, char* argv[]){
 				}
 				
 			}
-			// cout << endl;
-			map<int, vector<int>> rep;
-			for(auto e: tk){
-				if(rep.find(find(e, link)) == rep.end()){
-					vector<int> temp;
-					temp.push_back(e);
-					rep[find(e, link)] = temp;
-				}
-				else{
-					rep[find(e, link)].push_back(e);
-				}
-			}
-
-			vector<vector<int>> gk;
-			for(auto x: rep){
-				gk.push_back(x.second);
-			}
-			// tempg.push_back(gk);
-
-			// printing the graph
-			// std::reverse(tempg.begin(), tempg.end());
-			ofstream outfile(outname);
-			if(dok <= maxk){
-				outfile << 1 << "\n";
-				outfile << gk.size() << "\n";
-				for(auto e: gk){
-					for(auto v: e){
-						outfile << v << " ";
-					}
-					outfile << "\n";
-				}
-			}
-			else{
-				outfile << -1 << "\n";
-			}
-			outfile.close();
+			MPI_Bcast(link.data(), n, MPI_INT, 0, MPI_COMM_WORLD);
 		}else{
 			MPI_Bcast(&currtrussize, 1, MPI_INT, 0, MPI_COMM_WORLD);
 			//cout << id << " has currtrussize?: " << currtrussize << endl;
@@ -618,15 +590,79 @@ int main(int argc, char* argv[]){
 				}
 			}
 			//cout << id << "has sent" << endl;
+			MPI_Bcast(link.data(),n, MPI_INT, 0, MPI_COMM_WORLD);
 		}
-
-		endt = MPI_Wtime();
+		// getting the representative of each vertex that is a total-k-truss
+		map<int, vector<int>> rep;
+		for(int e = 0;e < n; e++){
+			if(rep.find(find(e, link)) == rep.end()){
+				vector<int> temp;
+				temp.push_back(e);
+				rep[find(e, link)] = temp;
+			}
+			else{
+				rep[find(e, link)].push_back(e);
+			}
+		}
+		
+		// performing task 2
+		vector<int> infv;
+		for(j = 0;j < V.size(); j++){
+			set<int> components_single;
+			components_single.insert(find(V[j], link));
+			if(E[j].size()>0){
+				for(auto e: E[j]){
+					components_single.insert(find(e, link));
+				}
+			}
+			set<int> components;
+			for(auto c: components_single){
+				if(rep[c].size() > 1){
+					components.insert(c);
+				}
+			}
+			if(components.size() >= p){
+				infv.push_back(V[j]);
+			}
+			// for(auto c: components){
+			// 	cout << c << " ";
+			// }
+			// cout << "\n";
+		}
+		int infvsize[sz];
+		int myinfvsize = infv.size();
+		MPI_Gather(&myinfvsize, 1, MPI_INT, &infvsize, 1, MPI_INT, 0, MPI_COMM_WORLD);
 		if(id == 0){
-			cout << "Verbose 1: " << endt - startt << "\n";
+			vector<int> infvall;
+			for(auto v: infv){
+				infvall.push_back(v);
+			}
+			for(j = 1; j < sz; j++){
+				int temp[infvsize[j]];
+				MPI_Recv(temp, infvsize[j], MPI_INT, j, j, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+				for(int jc = 0; jc < infvsize[j]; jc++){
+					infvall.push_back(temp[jc]);
+				}
+			}
+			if(verbose == 0){
+				ofstream outfile(outname);
+				outfile << infvall.size() << "\n";
+				for(auto v: infvall){
+					outfile << v << " ";
+				}
+				outfile << "\n";
+				endt = MPI_Wtime();
+				cout << "Verbose 0: " << endt - startt << "\n";
+			}else if(verbose == 1){
+				endt = MPI_Wtime();
+				cout << "Verbose 1: " << endt - startt << "\n";
+			}
+		}
+		else{
+			MPI_Send(infv.data(), infv.size(), MPI_INT, 0, id, MPI_COMM_WORLD);
 		}
 	}
 	
-
 	//finsihed
 	endt = MPI_Wtime();
 	cout << id << " has finished, Time taken: " << endt - startt  << endl;
