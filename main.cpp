@@ -344,7 +344,7 @@ int main(int argc, char* argv[]){
 						active.erase(erase_itr);
 						hashtable[e]--;
 						active.insert({hashtable[e], e});
-						Y.insert({{arr[0], arr[1]}, arr[2]});
+						Y.insert({{arr[0], arr[1]}, arr[2]});	// critical section
 					}
 				}
 			}
