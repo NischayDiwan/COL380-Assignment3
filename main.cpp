@@ -1,6 +1,7 @@
 #include<bits/stdc++.h>
 #include<mpi.h>
-// #pragma GCC optimize("unroll-loops")
+#include<omp.h>
+
 using namespace std;
 
 int find(int x,vector<int> &link){
@@ -25,8 +26,8 @@ int main(int argc, char* argv[]){
 	int i, j, k, n, m, tmp;
 	// time measure variables
 	double startt, endt;
-
-	MPI_Init(&argc, &argv);
+	int get_support;
+	MPI_Init_thread(&argc, &argv,MPI_THREAD_MULTIPLE,&get_support);
 	int id, sz;
 	MPI_Comm_rank(MPI_COMM_WORLD, &id);
 	MPI_Comm_size(MPI_COMM_WORLD, &sz);
@@ -35,6 +36,13 @@ int main(int argc, char* argv[]){
 	// 	cout << "num procs:" << sz << endl;
 	// }
 	// read input arguments
+	// #pragma omp parallel num_threads(2)
+	// {
+	// 	for(int se = 0;se < 100000000;se ++){
+	// 		int a = 1;
+	// 	}
+	// 	cout << "Hello from thread " << omp_get_thread_num() << " of " << id << " id\n";
+	// }
 	string header = argv[3];
 	header = header.substr(13, header.length() - 13);	// check 13 ?!
 	string filename = argv[2];
@@ -152,25 +160,36 @@ int main(int argc, char* argv[]){
 			infile.read(reinterpret_cast<char *>(&tmp), 4);
 			adj.push_back(tmp);
 		}
+		// #pragma omp parallel num_threads(4)
+		// {
+		// #pragma omp simple
+		// {
 		for(auto u: par[v]){
 			/*if(v <= u)
 				continue; */
+			// #pragma omp task
+			// {
 			for(auto w: E[(u - id)/sz]){
 				if(v == w)
 					continue;
 				else if(binary_search(adj.begin(), adj.end(), w)){
 					// increment support
 					if(supp.find({u, v})!=supp.end()){
+						// #pragma omp critical
 						supp[{u, v}].push_back(w);
 					}
 					else{
 						vector<int> throwaway;
 						throwaway.push_back(w);
+						// #pragma omp critical
 						supp.insert({{u, v}, throwaway});
 					}
 				}
 			}
+			// }
 		}
+		// }
+		// }
 	}
 	infile.close();
 	// supp[u, v] stores support of edge (u, v) in current processor
@@ -211,13 +230,6 @@ int main(int argc, char* argv[]){
 		vector<pair<int, int>> cur;
 		int global_min = loop_cnt - 2;
 
-		/*cout << "NEW ITERTION" << endl;
-		cout << "CURRENT GMIN = " << global_min << endl;
-		for(auto x: active){
-			cout << x.first << " " << x.second.first << " " << x.second.second << endl;
-		}
-		cout << endl << endl;*/
-
 		if(!done){
 			auto itr1 = active.begin(), itr2 = active.begin();
 			for(; itr2 != active.end(); itr2++){
@@ -242,11 +254,6 @@ int main(int argc, char* argv[]){
 				W.push_back({e, w});
 			}
 		}
-		//cout << W.size() << endl;
-		/*for(auto x: W){
-			cout << "( " << x.first.first << " , " << x.first.second << " , " << x.second << " ) ";
-		}*/
-		//cout << endl;
 		int ptr = 0;
 		while(true){
 			// dst1 for (u, w) edge  and   dst2 for (v, w) edge
@@ -328,24 +335,16 @@ int main(int argc, char* argv[]){
 				proc.push_back({{rec[0], rec[1]}, rec[2]});
 			}
 
-			// endt = MPI_Wtime();
-			// cout << "My rank: " << id << " Got dts :" << endt - startt << "\n";
-
 			for(auto x: proc){
 				pair<int, int> e = x.first;
 				int arr[] = {e.first, e.second, x.second};
-				//sort(arr, arr+3);
 				if(hashtable.find(e) != hashtable.end()){
-					//cout << arr[0] << " " << arr[1] << " " << arr[2] << endl;
 					if(Y.find({{arr[0], arr[1]}, arr[2]}) == Y.end()){
 						auto erase_itr = active.find({hashtable[e], e});
 						active.erase(erase_itr);
 						hashtable[e]--;
 						active.insert({hashtable[e], e});
 						Y.insert({{arr[0], arr[1]}, arr[2]});
-						/*if(arr[0] == 1){
-							cout << "BOCCHI " << arr[1] << " " << arr[2] << endl;
-						}*/
 					}
 				}
 			}
@@ -353,7 +352,6 @@ int main(int argc, char* argv[]){
 			ptr++;
 			// break out when all have mb[7k] = 0
 			int b_break = 0;
-			//MPI_Barrier(MPI_COMM_WORLD);
 			MPI_Allreduce(&b[0], &b_break, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
 			if(b_break == 0)
 				break;
@@ -376,14 +374,9 @@ int main(int argc, char* argv[]){
 	}
 
 	int curk = -1, maxk;
-
 	for(auto truss: T){
 		pair<int, int> e = truss.first;
 		curk = max(curk, truss.second - 2);
-		//if(truss.second >= 0){
-			//cout << "edge " << e.first << " " << e.second << " has truss number " << truss.second - 2;
-			//cout << endl;
-		//}
 	}
 
 	MPI_Allreduce(&curk, &maxk, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
@@ -517,19 +510,6 @@ int main(int argc, char* argv[]){
 			cout << "Verbose 1: " << endt - startt << "\n";
 		}
 	}else if(taskid == 2){
-		// if(id == 0){
-		// 	assert(V.size() == E.size());
-		// 	for(auto v: V){
-		// 		cout << v << " ";
-		// 	}
-		// 	cout << "\n";
-		// 	for(auto Ei: E){
-		// 		for(auto e: Ei){
-		// 			cout << e << " ";
-		// 		}
-		// 		cout << "\n";
-		// 	}
-		// }
 		MPI_Barrier(MPI_COMM_WORLD);
 		int currtrussize = 0;
 		int tedct[sz];
@@ -606,29 +586,28 @@ int main(int argc, char* argv[]){
 		}
 		
 		// performing task 2
+		endt = MPI_Wtime();
+		if(id == 0){
+			cout << "Task 2 components found: " << endt - startt << "\n";
+		}
 		vector<int> infv;
+		vector<set<int>> infcomponents;
 		for(j = 0;j < V.size(); j++){
-			set<int> components_single;
-			components_single.insert(find(V[j], link));
+			set<int> components;
+			if(rep[find(V[j], link)].size() > 1)
+				components.insert(find(V[j], link));
 			if(E[j].size()>0){
 				for(auto e: E[j]){
-					components_single.insert(find(e, link));
-				}
-			}
-			set<int> components;
-			for(auto c: components_single){
-				if(rep[c].size() > 1){
-					components.insert(c);
+					if(rep[find(e, link)].size() > 1)
+						components.insert(find(e, link));
 				}
 			}
 			if(components.size() >= p){
 				infv.push_back(V[j]);
+				infcomponents.push_back(components);
 			}
-			// for(auto c: components){
-			// 	cout << c << " ";
-			// }
-			// cout << "\n";
 		}
+
 		int infvsize[sz];
 		int myinfvsize = infv.size();
 		MPI_Gather(&myinfvsize, 1, MPI_INT, &infvsize, 1, MPI_INT, 0, MPI_COMM_WORLD);
@@ -654,12 +633,58 @@ int main(int argc, char* argv[]){
 				endt = MPI_Wtime();
 				cout << "Verbose 0: " << endt - startt << "\n";
 			}else if(verbose == 1){
+				vector<vector<int>> infvallcomponents;
+				int currv = 0;
+				for(auto v: infcomponents){
+					infvallcomponents.push_back(vector<int>(v.begin(),v.end()));
+					currv++;
+				}
+				for(j = 1;j<sz;j++){
+					for(int jc = 0; jc < infvsize[j]; jc++){
+						int tempsize;
+						MPI_Recv(&tempsize, 1, MPI_INT, j, j, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+						// cout << "id: " << j << " tempsize: " << tempsize << endl;
+						int temp[tempsize];
+						MPI_Recv(temp, tempsize, MPI_INT, j, j, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+						vector<int> tempv(temp, temp + tempsize);
+						infvallcomponents.push_back(tempv);
+						currv++;
+					}
+				}
+				assert(infvall.size() == infvallcomponents.size());
+				endt = MPI_Wtime();
+				ofstream outfile(outname);
+				outfile << infvall.size() << "\n";
+				for(int v = 0; v < infvall.size(); v++){
+					outfile << infvall[v] << "\n";
+					for(auto r: infvallcomponents[v]){
+						for(auto r2: rep[r]){
+							outfile << r2 << " ";
+						}
+					}
+					outfile << "\n";
+				}
 				endt = MPI_Wtime();
 				cout << "Verbose 1: " << endt - startt << "\n";
 			}
 		}
 		else{
 			MPI_Send(infv.data(), infv.size(), MPI_INT, 0, id, MPI_COMM_WORLD);
+			if(verbose == 1){
+				for(j = 0; j < infv.size(); j++){
+					int tempsize= infcomponents[j].size();
+					// MPI_Request req;
+					// cout << infv[j] << " tempsize: " << tempsize << endl;
+					MPI_Send(&tempsize,1, MPI_INT, 0, id, MPI_COMM_WORLD);
+					int temp[infcomponents[j].size()];
+					int k = 0;
+					for(auto c: infcomponents[j]){
+						temp[k] = c;
+						k++;
+					}
+					MPI_Send(temp, tempsize, MPI_INT, 0, id, MPI_COMM_WORLD);
+				}
+			}
 		}
 	}
 	
