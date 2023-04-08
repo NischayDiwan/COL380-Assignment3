@@ -4,6 +4,22 @@
 
 using namespace std;
 
+struct hash_pair {
+    template <class T1, class T2>
+    size_t operator()(const pair<T1, T2>& p) const
+    {
+        auto hash1 = hash<T1>{}(p.first);
+        auto hash2 = hash<T2>{}(p.second);
+ 
+        if (hash1 != hash2) {
+            return hash1 ^ hash2;             
+        }
+         
+        // If hash1 == hash2, their XOR is zero.
+          return hash1;
+    }
+};
+
 int find(int x,vector<int> &link){
 	while(x != link[x]) x = link[x];
 	return x;
@@ -24,25 +40,25 @@ void unite(int a, int b,vector<int> &link){
 int main(int argc, char* argv[]){
 
 	int i, j, k, n, m, tmp;
+	int tnum = 2;
+	if(argc == 10){
+		string tnumstr = argv[9];
+		tnum = stoi(tnumstr);
+	}
+	// int tnum = 2;
+	
 	// time measure variables
 	double startt, endt;
 	int get_support;
-	MPI_Init_thread(&argc, &argv,MPI_THREAD_MULTIPLE,&get_support);
+	MPI_Init_thread(&argc, &argv,MPI_THREAD_SINGLE,&get_support);
 	int id, sz;
 	MPI_Comm_rank(MPI_COMM_WORLD, &id);
 	MPI_Comm_size(MPI_COMM_WORLD, &sz);
 	startt = MPI_Wtime();
-	// if(id == 0){
-	// 	cout << "num procs:" << sz << endl;
-	// }
-	// read input arguments
-	// #pragma omp parallel num_threads(2)
-	// {
-	// 	for(int se = 0;se < 100000000;se ++){
-	// 		int a = 1;
-	// 	}
-	// 	cout << "Hello from thread " << omp_get_thread_num() << " of " << id << " id\n";
-	// }
+	if(id == 0){
+		cout << "Number of threads: " << tnum << endl;
+		cout << "Support: " << get_support << endl;
+	}
 	string header = argv[3];
 	header = header.substr(13, header.length() - 13);	// check 13 ?!
 	string filename = argv[2];
@@ -100,6 +116,7 @@ int main(int argc, char* argv[]){
 
 	// establish order on vertices based on degree
 	sort(deg.begin(), deg.end());
+	#pragma omp parallel for num_threads(tnum)
 	for(i = 0; i < n; i++){
 		prio[deg[i].second] = i;
 		//cout << deg[i].first << " " << deg[i].second << "\n";
@@ -160,15 +177,9 @@ int main(int argc, char* argv[]){
 			infile.read(reinterpret_cast<char *>(&tmp), 4);
 			adj.push_back(tmp);
 		}
-		// #pragma omp parallel num_threads(4)
-		// {
-		// #pragma omp simple
-		// {
 		for(auto u: par[v]){
 			/*if(v <= u)
 				continue; */
-			// #pragma omp task
-			// {
 			for(auto w: E[(u - id)/sz]){
 				if(v == w)
 					continue;
@@ -186,10 +197,7 @@ int main(int argc, char* argv[]){
 					}
 				}
 			}
-			// }
 		}
-		// }
-		// }
 	}
 	infile.close();
 	// supp[u, v] stores support of edge (u, v) in current processor
@@ -202,7 +210,10 @@ int main(int argc, char* argv[]){
 	}*/
 
 	set<pair<int, pair<int, int>>> active;
+	// unordered_map<pair<int, int>, int, hash_pair> hashtable;
 	map<pair<int, int>, int> hashtable;
+	// hashtable.reserve(1024);
+	// hashtable.max_load_factor(0.25);
 	vector<pair<pair<int, int>, int >> T;
 	set<pair<pair<int, int>, int>> Y;
 
@@ -226,6 +237,8 @@ int main(int argc, char* argv[]){
 		cout << "Truss computation start: " << endt - startt << "\n";
 	}
 
+	double srtotal = 0;
+	int debug = 0;
 	while(action!=0){
 		vector<pair<int, int>> cur;
 		int global_min = loop_cnt - 2;
@@ -249,12 +262,15 @@ int main(int argc, char* argv[]){
 		}
 
 		vector<pair<pair<int, int>, int>> W;
+		// #pragma omp parallel for num_threads(tnum)
 		for(auto e: cur){
 			for(auto w: supp[{e.first, e.second}]){
+				// #pragma omp critical
 				W.push_back({e, w});
 			}
 		}
 		int ptr = 0;
+		
 		while(true){
 			// dst1 for (u, w) edge  and   dst2 for (v, w) edge
 			int b[9], u = 0, v = 0, w = 0, dst1 = 0, dst2 = 0;
@@ -292,9 +308,10 @@ int main(int argc, char* argv[]){
 				}
 				b[4] = dst1; b[8] = dst2;
 			}
-
+			double srs = MPI_Wtime();
 			// gather scatter approach
 			int num_packets[sz], payload = 0;
+			#pragma omp parallel for num_threads(tnum)
 			for(i = 0; i < sz; i++){
 				num_packets[i] = 0;
 			}
@@ -302,25 +319,34 @@ int main(int argc, char* argv[]){
 			MPI_Gather(b, 9, MPI_INT, mb, 9, MPI_INT, 0, MPI_COMM_WORLD);
 			// MPI_Barrier(MPI_COMM_WORLD);
 			if(id == 0){
+				// #pragma omp parallel for num_threads(tnum)
 				for(i = 0; i < sz; i++){
 					if(mb[9*i] == 1){
+						// #pragma omp critical 
+						// {
 						num_packets[mb[9*i+4]]++;
 						num_packets[mb[9*i+8]]++;
+						// }
 					}
 				}
 			}
 			MPI_Scatter(num_packets, 1, MPI_INT, &payload, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
 			int tagid[sz];
+			#pragma omp parallel for num_threads(tnum)
 			for(i = 0; i < sz; i++){
 				tagid[i] = 0;
 			}
 			if(id == 0){
+				// #pragma omp parallel for num_threads(tnum)
 				for(i = 0; i < sz; i++){
 					if(mb[9*i] == 1){
 						MPI_Request req1, req2;
+						// # pragma omp critical
+						// {
 						MPI_Isend(mb+9*i+1, 3, MPI_INT, mb[9*i+4], mb[9*i+4] + tagid[mb[9*i+4]]++, MPI_COMM_WORLD, &req1);
 						MPI_Isend(mb+9*i+5, 3, MPI_INT, mb[9*i+8], mb[9*i+8] + tagid[mb[9*i+8]]++, MPI_COMM_WORLD, &req2);
+						// }
 						// if dst == 0:
 						//		do work
 					}
@@ -328,12 +354,86 @@ int main(int argc, char* argv[]){
 			}
 
 			vector<pair<pair<int, int>, int>> proc;
-			int rec[3];
+			// #pragma omp parallel for num_threads(tnum)
 			for(i = 0; i < payload; i++){
+				int rec[3];
 				MPI_Status stat;
 				MPI_Recv(rec, 3, MPI_INT, 0, id + i, MPI_COMM_WORLD, &stat);
+				// #pragma omp critical
 				proc.push_back({{rec[0], rec[1]}, rec[2]});
 			}
+			double sre = MPI_Wtime();
+			srtotal += (sre - srs);
+
+			// Removing master slave all to all approach
+			// b : {1, u, w, v, dst1, v, w, u, dst2}
+			// cout << debug << endl;
+			// int num_packets[sz], payload = 0;
+			// for(i = 0; i < sz; i++){
+			// 	num_packets[i] = 0;
+			// }
+
+			// if(b[0] == 1){
+			// 	num_packets[b[4]]++;
+			// 	num_packets[b[8]]++;
+			// 	// cout << "sending to " << b[4] << " and " << b[8] << endl;
+			// }
+
+			// // everyone knows how much to receive
+			// MPI_Alltoall(num_packets, 1, MPI_INT, num_packets, 1, MPI_INT, MPI_COMM_WORLD);
+			// MPI_Barrier(MPI_COMM_WORLD);
+			// cout << "enter" << endl;
+			// // for(i = 0; i < sz; i++){
+			// // 	cout << num_packets[i] << " ";
+			// // }
+			// // cout << endl;
+
+			// vector<pair<pair<int, int>, int>> proc;
+			// vector<MPI_Request> reqqueue;
+			// int tagid[sz];
+			// for(i = 0; i < sz; i++){
+			// 	tagid[i] = 0;
+			// }
+			// #pragma omp parallel num_threads(tnum)
+			// {
+			// int tid = omp_get_thread_num();
+			// int flag = 0;
+			// if(tid == 0){
+			// 	if(b[0] == 1){
+			// 		MPI_Request req1, req2;
+			// 		cout << "sending to " << b[4] << ":" << tagid[b[4]] << endl;
+			// 		MPI_Rsend(b+1, 3, MPI_INT, b[4], tagid[b[4]], MPI_COMM_WORLD);
+			// 		cout << "send returned " << b[4] << ":" << tagid[b[4]] << endl;
+			// 		tagid[b[4]]++;
+			// 		// while(flag == 0){}
+			// 		cout << "sending to " << b[8] << ":" << tagid[b[8]] << endl;
+			// 		MPI_Rsend(b+5, 3, MPI_INT, b[8], tagid[b[8]], MPI_COMM_WORLD);
+			// 		cout << "send returned " << b[8] << ":" << tagid[b[8]] << endl;
+			// 		tagid[b[8]]++;				
+			// 	}
+			// }
+			
+			// if(tid == 1){
+			// 	for(i = 0; i < sz; i++){
+			// 		for(j = 0; j < num_packets[i]; j++){
+			// 			int rec[3];
+			// 			MPI_Status stat;
+			// 			MPI_Request req;
+			// 			cout << "recieving from " << i << ":" << j << endl;
+			// 			MPI_Recv(rec, 3, MPI_INT, i, MPI_ANY_TAG, MPI_COMM_WORLD, &stat);
+			// 			// flag = 1;
+			// 			// reqqueue.push_back(req);
+			// 			cout << "recieved " << i << ":" << j << endl;
+			// 			proc.push_back({{rec[0], rec[1]}, rec[2]});
+			// 		}
+			// 	}
+			// }
+			// }
+			// for(auto x: reqqueue){
+			// 	MPI_Wait(&x, MPI_STATUS_IGNORE);
+			// 	cout << "waited" << endl;
+			// }
+			// MPI_Waitall(reqqueue.size(), reqqueue.data(), MPI_STATUSES_IGNORE);
 
 			for(auto x: proc){
 				pair<int, int> e = x.first;
@@ -348,7 +448,7 @@ int main(int argc, char* argv[]){
 					}
 				}
 			}
-
+			debug++;
 			ptr++;
 			// break out when all have mb[7k] = 0
 			int b_break = 0;
@@ -356,7 +456,6 @@ int main(int argc, char* argv[]){
 			if(b_break == 0)
 				break;
 		}
-
 		//MPI_Barrier(MPI_COMM_WORLD);
 		MPI_Allreduce(&done, &action, 1, MPI_INT, MPI_PROD, MPI_COMM_WORLD);
 		action = 1 - action;
@@ -368,6 +467,10 @@ int main(int argc, char* argv[]){
 			loop_cnt++;
 	}
 	
+	if(id == 0){
+		cout << "sendrecv time: " << srtotal << "\n";
+	}
+
 	endt = MPI_Wtime();
 	if(id == 0){
 		cout << "Truss computation end: " << endt - startt << "\n";
@@ -407,11 +510,10 @@ int main(int argc, char* argv[]){
 		// mpi send recieve left
 		if(id == 0){
 			vector<int> link(n,0);
-			// int size[n];
+			#pragma omp parallel for num_threads(tnum)
 			for(k = 0; k < n; k++) link[k] = k;
-			// for(k = 0; k < n; k++) size[k] = 1;
 			vector<vector<vector<int>>> tempg;
-			
+			// #pragma omp parallel for num_threads(tnum)
 			for(i = dok; i >= startk; i--){
 				// cout << "Truss " << i << endl;
 				set<int> tk;
@@ -422,11 +524,13 @@ int main(int argc, char* argv[]){
 					pair<int, int> e = truss.first;
 					if(truss.second >= currtrussize){
 						edct++;
+						// #pragma omp critical
 						unite(e.first, e.second, link);
 						tk.insert(e.first);
 						tk.insert(e.second);
 					}
 				}
+				// #pragma omp critical
 				MPI_Gather(&edct, 1, MPI_INT, &tedct, 1, MPI_INT, 0, MPI_COMM_WORLD);
 				for(j = 1; j < sz; j++){
 					// cout << tedct[j] << endl;
@@ -435,6 +539,7 @@ int main(int argc, char* argv[]){
 						// MPI_Status jstat;
 						MPI_Recv(&ed, 2, MPI_INT, j, j, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 						// MPI_Wait(&jstat, MPI_STATUS_IGNORE);
+						// #pragma omp critical
 						unite(ed[0], ed[1], link);
 						tk.insert(ed[0]);
 						tk.insert(ed[1]);
@@ -458,6 +563,7 @@ int main(int argc, char* argv[]){
 				for(auto x: rep){
 					gk.push_back(x.second);
 				}
+				// #pragma omp critical
 				tempg.push_back(gk);
 			}
 
@@ -484,9 +590,11 @@ int main(int argc, char* argv[]){
 				MPI_Bcast(&currtrussize, 1, MPI_INT, 0, MPI_COMM_WORLD);
 				//cout << id << " has currtrussize?: " << currtrussize << endl;
 				int edct = 0;
+				#pragma omp parallel for num_threads(tnum)
 				for(auto truss: T){
 					pair<int, int> e = truss.first;
 					if(truss.second >= currtrussize){
+						#pragma omp critical
 						edct++;
 					}
 				}
@@ -626,10 +734,12 @@ int main(int argc, char* argv[]){
 			if(verbose == 0){
 				ofstream outfile(outname);
 				outfile << infvall.size() << "\n";
-				for(auto v: infvall){
-					outfile << v << " ";
+				if(infvall.size() > 0){
+					for(auto v: infvall){
+						outfile << v << " ";
+					}
+					outfile << "\n";
 				}
-				outfile << "\n";
 				endt = MPI_Wtime();
 				cout << "Verbose 0: " << endt - startt << "\n";
 			}else if(verbose == 1){
@@ -655,14 +765,16 @@ int main(int argc, char* argv[]){
 				endt = MPI_Wtime();
 				ofstream outfile(outname);
 				outfile << infvall.size() << "\n";
-				for(int v = 0; v < infvall.size(); v++){
-					outfile << infvall[v] << "\n";
-					for(auto r: infvallcomponents[v]){
-						for(auto r2: rep[r]){
-							outfile << r2 << " ";
+				if(infvall.size() > 0){
+					for(int v = 0; v < infvall.size(); v++){
+						outfile << infvall[v] << "\n";
+						for(auto r: infvallcomponents[v]){
+							for(auto r2: rep[r]){
+								outfile << r2 << " ";
+							}
 						}
+						outfile << "\n";
 					}
-					outfile << "\n";
 				}
 				endt = MPI_Wtime();
 				cout << "Verbose 1: " << endt - startt << "\n";
